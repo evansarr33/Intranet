@@ -12,7 +12,15 @@ function setCookie(res,value,maxAge){res.setHeader('Set-Cookie',`${COOKIE}=${enc
 function clearCookie(res){res.setHeader('Set-Cookie',`${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`)}
 function reply(res,status,data){res.statusCode=status;res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('Cache-Control','no-store');res.end(JSON.stringify(data));}
 async function body(req){let text='';for await(const chunk of req){text+=chunk;if(text.length>16000)throw Object.assign(new Error('Requête trop volumineuse.'),{status:413})}try{return JSON.parse(text||'{}')}catch{throw Object.assign(new Error('Requête invalide.'),{status:400})}}
-async function rest(path,method='GET',value){const c=config();const response=await fetch(`${c.url}/rest/v1/${path}`,{method,headers:{apikey:c.key,Authorization:`Bearer ${c.key}`,'Content-Type':'application/json',Prefer:method==='POST'?'return=representation':method==='PATCH'?'return=representation':'count=exact'},body:value?JSON.stringify(value):undefined,cache:'no-store'});const raw=await response.text();let data;try{data=raw?JSON.parse(raw):null}catch{data=raw}if(!response.ok){const error=new Error(typeof data==='object'?(data.message||data.hint||'Erreur de base de données.'):String(data));error.status=response.status;throw error}return{data,range:response.headers.get('content-range')};}
+async function rest(path,method='GET',value){
+ const c=config(),headers={apikey:c.key,'Content-Type':'application/json',Prefer:method==='POST'?'return=representation':method==='PATCH'?'return=representation':'count=exact'};
+ // Legacy service_role keys are JWTs. New sb_secret keys must be sent only as apikey.
+ if(c.key.startsWith('eyJ'))headers.Authorization=`Bearer ${c.key}`;
+ const response=await fetch(`${c.url}/rest/v1/${path}`,{method,headers,body:value?JSON.stringify(value):undefined,cache:'no-store'});
+ const raw=await response.text();let data;try{data=raw?JSON.parse(raw):null}catch{data=raw}
+ if(!response.ok){const error=new Error(typeof data==='object'?(data.message||data.hint||'Erreur de base de données.'):String(data));error.status=response.status;throw error}
+ return{data,range:response.headers.get('content-range')};
+}
 function query(table,params){return`${table}?${new URLSearchParams(params).toString()}`}
 function daysBetween(a,b){let count=0;for(let d=new Date(`${a}T12:00:00`),end=new Date(`${b}T12:00:00`);d<=end;d.setDate(d.getDate()+1))if(d.getDay()!==0&&d.getDay()!==6)count++;return count}
 async function session(req){const c=config(),claims=unsign(cookie(req,COOKIE),c.secret);if(!claims?.sub)return null;const {data}=await rest(query('hr_accounts',{select:'employee_id,identifier,role,enabled',employee_id:`eq.${claims.sub}`,limit:'1'}));const account=data?.[0];if(!account||!account.enabled)return null;return{employee_id:account.employee_id,identifier:account.identifier,role:account.role}}
