@@ -12,7 +12,7 @@ Noria est un portail RH web en francais, responsive ordinateur/mobile, avec conn
 - Formations : catalogue, capacite, inscriptions et suivi d’achevement.
 - Documents prives, formats PDF/PNG/JPEG, acces par liens signes courts et dates de conservation.
 - Entretiens, objectifs, progression et validations.
-- Taches d’integration/depart, notifications internes, administration des comptes et journal des actions/export.
+- Taches d’integration/depart avec modeles configurables, acces des nouveaux comptes a partir de leur date d’arrivee, notifications internes, administration des comptes et journal des actions/export.
 
 ## Architecture
 
@@ -23,7 +23,7 @@ Les tables RH ont RLS activee; les privileges Data API des roles clients sont re
 ## Publication et configuration
 
 - Le code source vit dans `evansarr33/Intranet`; le proxy est `api/index.js`.
-- Le bundle Edge `supabase/functions/noria/index.ts` est genere depuis `index.html`, `styles.css`, `app.js`, `work/edge-server.template.ts` et `work/edge-routes.template.ts` avec `work/build-edge.mjs`.
+- Le bundle Edge `supabase/functions/noria/index.ts` est genere depuis `index.html`, `styles.css`, `app.js`, `work/edge-server.template.ts` et `work/edge-routes.template.ts` avec `work/build-edge.mjs`. Sa configuration Deno est `supabase/functions/noria/deno.json`.
 - Les migrations versionnees sont dans `supabase/migrations/`; `supabase/schema.sql` reste le schema de reference pour une nouvelle base.
 - Le secret de signature de session peut etre fourni dans Supabase sous `SESSION_SECRET` (au moins 32 caracteres). A defaut, la fonction conserve la compatibilite avec la cle serveur Supabase.
 
@@ -32,4 +32,3 @@ Les tables RH ont RLS activee; les privileges Data API des roles clients sont re
 L’application rend les regles configurables, mais l’employeur doit confirmer les droits de conges, temps partiel/prorata/report/arrondis, les horaires et pauses applicables, la delegation, les durees de conservation et la procedure de recuperation d’identifiant sans e-mail. Les echeances de conservation constituent un suivi; aucune suppression automatique n’est active. Confirmer aussi les parametres de sauvegarde/restauration et les engagements des hebergeurs.
 
 La paie complete, les declarations sociales/DSN, la signature electronique, la biometrie, la geolocalisation et le portail candidat public ne font pas partie de ce perimetre initial. L’implementation ne remplace ni la recette d’acceptation par roles ni la validation juridique/RH.
-

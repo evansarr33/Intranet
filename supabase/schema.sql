@@ -136,6 +136,7 @@ alter table public.employees add column if not exists work_percentage numeric(5,
   check (work_percentage > 0 and work_percentage <= 100);
 alter table public.hr_accounts add column if not exists must_change_password boolean not null default false;
 alter table public.hr_accounts add column if not exists session_version integer not null default 1;
+alter table public.hr_accounts add column if not exists active_from date not null default current_date;
 alter table public.employee_documents add column if not exists retention_until date;
 alter table public.employee_documents add column if not exists created_by uuid references public.employees(id) on delete set null;
 alter table public.employee_documents add column if not exists version integer not null default 1;
@@ -288,6 +289,16 @@ create table if not exists public.onboarding_tasks (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.onboarding_task_templates (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  phase text not null default 'arrival' check (phase in ('pre_arrival','arrival','departure')),
+  items jsonb not null default '[]'::jsonb,
+  enabled boolean not null default true,
+  created_by uuid references public.employees(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 create table if not exists public.attendance_change_requests (
   id uuid primary key default gen_random_uuid(),
   attendance_id uuid not null references public.attendance_records(id) on delete cascade,
@@ -349,6 +360,7 @@ alter table public.leave_policies enable row level security;
 alter table public.organization_holidays enable row level security;
 alter table public.leave_balance_transactions enable row level security;
 alter table public.onboarding_tasks enable row level security;
+alter table public.onboarding_task_templates enable row level security;
 alter table public.attendance_change_requests enable row level security;
 alter table public.profile_change_requests enable row level security;
 
@@ -373,6 +385,8 @@ create policy noria_no_client_access on public.leave_policies for all to anon, a
 create policy noria_no_client_access on public.organization_holidays for all to anon, authenticated using (false) with check (false);
 create policy noria_no_client_access on public.leave_balance_transactions for all to anon, authenticated using (false) with check (false);
 create policy noria_no_client_access on public.onboarding_tasks for all to anon, authenticated using (false) with check (false);
+drop policy if exists noria_no_client_access on public.onboarding_task_templates;
+create policy noria_no_client_access on public.onboarding_task_templates for all to anon, authenticated using (false) with check (false);
 create policy noria_no_client_access on public.attendance_change_requests for all to anon, authenticated using (false) with check (false);
 create policy noria_no_client_access on public.profile_change_requests for all to anon, authenticated using (false) with check (false);
 drop policy if exists noria_no_client_access on public.attendance_period_closures;
@@ -385,7 +399,8 @@ revoke all on public.employees, public.hr_accounts, public.leave_requests,
   public.employee_change_log, public.noria_notifications, public.noria_audit_log,
   public.noria_settings, public.noria_login_attempts, public.leave_policies, public.organization_holidays,
   public.leave_balance_transactions, public.onboarding_tasks,
-  public.attendance_change_requests, public.profile_change_requests, public.attendance_period_closures from anon, authenticated;
+  public.attendance_change_requests, public.profile_change_requests, public.attendance_period_closures,
+  public.onboarding_task_templates from anon, authenticated;
 grant usage on schema public to service_role;
 grant all on public.employees, public.hr_accounts, public.leave_requests,
   public.attendance_records, public.job_postings, public.candidates,
@@ -394,5 +409,5 @@ grant all on public.employees, public.hr_accounts, public.leave_requests,
   public.employee_change_log, public.noria_notifications, public.noria_audit_log,
   public.noria_settings, public.noria_login_attempts, public.leave_policies, public.organization_holidays,
   public.leave_balance_transactions, public.onboarding_tasks,
-  public.attendance_change_requests, public.profile_change_requests, public.attendance_period_closures to service_role;
-
+  public.attendance_change_requests, public.profile_change_requests, public.attendance_period_closures,
+  public.onboarding_task_templates to service_role;
