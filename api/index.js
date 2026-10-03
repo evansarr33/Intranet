@@ -26,10 +26,15 @@ module.exports=async function handler(req,res){
     const incoming=new URL(req.url,`https://${req.headers.host||'localhost'}`);
     const action=incoming.searchParams.get('action');
     if(!action)return reply(res,404,{error:'Action introuvable.'});
+    const requestOrigin=req.headers.origin;
+    if(req.method==='POST'){
+      if(!requestOrigin||new URL(requestOrigin).host!==req.headers.host)return reply(res,403,{error:'Origine de la requête refusée.'});
+    }
 
     const target=new URL(EDGE_FUNCTION);
     target.searchParams.set('action',action);
     const headers={apikey:SUPABASE_PUBLISHABLE_KEY};
+    if(requestOrigin){headers.origin=requestOrigin;headers['x-noria-origin']=requestOrigin}
     if(req.headers.cookie)headers.Cookie=req.headers.cookie;
 
     let requestBody;
@@ -54,3 +59,4 @@ module.exports=async function handler(req,res){
     });
   }
 };
+
