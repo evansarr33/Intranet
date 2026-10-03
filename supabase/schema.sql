@@ -48,6 +48,7 @@ create table if not exists public.leave_requests (
 );
 create index if not exists leave_requests_employee_dates on public.leave_requests(employee_id,start_date,end_date);
 create index if not exists leave_requests_status_start on public.leave_requests(status,start_date);
+create index if not exists leave_requests_reviewer on public.leave_requests(reviewed_by);
 
 create table if not exists public.attendance_records (
   id uuid primary key default gen_random_uuid(),
@@ -128,6 +129,14 @@ create table if not exists public.performance_reviews (
   created_at timestamptz not null default now()
 );
 
+create index if not exists employees_manager on public.employees(manager_id);
+create index if not exists candidates_job_posting on public.candidates(job_posting_id);
+create index if not exists job_postings_hiring_manager on public.job_postings(hiring_manager_id);
+create index if not exists training_enrollments_employee on public.training_enrollments(employee_id);
+create index if not exists employee_documents_employee on public.employee_documents(employee_id);
+create index if not exists performance_reviews_employee on public.performance_reviews(employee_id);
+create index if not exists performance_reviews_reviewer on public.performance_reviews(reviewer_id);
+
 alter table public.employees enable row level security;
 alter table public.hr_accounts enable row level security;
 alter table public.leave_requests enable row level security;
@@ -138,6 +147,18 @@ alter table public.training_courses enable row level security;
 alter table public.training_enrollments enable row level security;
 alter table public.employee_documents enable row level security;
 alter table public.performance_reviews enable row level security;
+
+-- Deny direct Data API access even if a table grant is later added by mistake.
+create policy noria_no_client_access on public.employees for all to anon, authenticated using (false) with check (false);
+create policy noria_no_client_access on public.hr_accounts for all to anon, authenticated using (false) with check (false);
+create policy noria_no_client_access on public.leave_requests for all to anon, authenticated using (false) with check (false);
+create policy noria_no_client_access on public.attendance_records for all to anon, authenticated using (false) with check (false);
+create policy noria_no_client_access on public.job_postings for all to anon, authenticated using (false) with check (false);
+create policy noria_no_client_access on public.candidates for all to anon, authenticated using (false) with check (false);
+create policy noria_no_client_access on public.training_courses for all to anon, authenticated using (false) with check (false);
+create policy noria_no_client_access on public.training_enrollments for all to anon, authenticated using (false) with check (false);
+create policy noria_no_client_access on public.employee_documents for all to anon, authenticated using (false) with check (false);
+create policy noria_no_client_access on public.performance_reviews for all to anon, authenticated using (false) with check (false);
 
 revoke all on public.employees, public.hr_accounts, public.leave_requests,
   public.attendance_records, public.job_postings, public.candidates,
