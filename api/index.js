@@ -1,40 +1,56 @@
-const { randomBytes, scryptSync, timingSafeEqual, createHmac } = require('node:crypto');
+// Same-origin proxy from Vercel to the authenticated Supabase Edge Function.
+// The service key and session signing secret remain in Supabase; Vercel needs no secrets.
+const SUPABASE_URL = 'https://kpcprbhsaxdlwftofrym.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_2eyDXjK_UK8mxZJdNp1bbw_jedfJBhQ';
+const EDGE_FUNCTION = `${SUPABASE_URL}/functions/v1/noria`;
 
-const COOKIE = 'noria_session';
-const attempts = new Map();
-const enc = value => Buffer.from(value).toString('base64url');
-const safeEqual = (a, b) => { const x=Buffer.from(String(a)),y=Buffer.from(String(b)); return x.length===y.length&&timingSafeEqual(x,y); };
-function config(){const url=process.env.SUPABASE_URL,key=process.env.SUPABASE_SERVICE_ROLE_KEY||process.env.SUPABASE_SECRET_KEY,secret=process.env.SESSION_SECRET;if(!url||!key||!secret||secret.length<32)throw new Error('Le service RH est en cours de configuration. Réessayez plus tard.');return{url:url.replace(/\/$/,''),key,secret};}
-function sign(payload,secret){const head=enc(JSON.stringify({alg:'HS256',typ:'JWT'})),body=enc(JSON.stringify(payload)),data=`${head}.${body}`,signature=createHmac('sha256',secret).update(data).digest('base64url');return`${data}.${signature}`;}
-function unsign(token,secret){if(!token)return null;const parts=token.split('.');if(parts.length!==3)return null;const digest=createHmac('sha256',secret).update(`${parts[0]}.${parts[1]}`).digest('base64url');if(!safeEqual(digest,parts[2]))return null;try{const data=JSON.parse(Buffer.from(parts[1],'base64url').toString());return data.exp>Date.now()/1000?data:null}catch{return null}}
-function cookie(req,name){const part=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith(`${name}=`));return part?decodeURIComponent(part.slice(name.length+1)):''}
-function setCookie(res,value,maxAge){res.setHeader('Set-Cookie',`${COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`)}
-function clearCookie(res){res.setHeader('Set-Cookie',`${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`)}
-function reply(res,status,data){res.statusCode=status;res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('Cache-Control','no-store');res.end(JSON.stringify(data));}
-async function body(req){let text='';for await(const chunk of req){text+=chunk;if(text.length>7200000)throw Object.assign(new Error('Requête trop volumineuse.'),{status:413})}try{return JSON.parse(text||'{}')}catch{throw Object.assign(new Error('Requête invalide.'),{status:400})}}
-async function rest(path,method='GET',value){const c=config();const response=await fetch(`${c.url}/rest/v1/${path}`,{method,headers:{apikey:c.key,Authorization:`Bearer ${c.key}`,'Content-Type':'application/json',Prefer:method==='POST'?'return=representation':method==='PATCH'?'return=representation':'count=exact'},body:value?JSON.stringify(value):undefined,cache:'no-store'});const raw=await response.text();let data;try{data=raw?JSON.parse(raw):null}catch{data=raw}if(!response.ok){const error=new Error(typeof data==='object'?(data.message||data.hint||'Erreur de base de données.'):String(data));error.status=response.status;throw error}return{data,range:response.headers.get('content-range')};}
-function query(table,params){return`${table}?${new URLSearchParams(params).toString()}`}
-function daysBetween(a,b){let count=0;for(let d=new Date(`${a}T12:00:00`),end=new Date(`${b}T12:00:00`);d<=end;d.setDate(d.getDate()+1))if(d.getDay()!==0&&d.getDay()!==6)count++;return count}
-async function session(req){const c=config(),claims=unsign(cookie(req,COOKIE),c.secret);if(!claims?.sub)return null;const {data}=await rest(query('hr_accounts',{select:'employee_id,identifier,role,enabled',employee_id:`eq.${claims.sub}`,limit:'1'}));const account=data?.[0];if(!account||!account.enabled)return null;return{employee_id:account.employee_id,identifier:account.identifier,role:account.role}}
-const employeeFields='id,staff_number,first_name,last_name,job_title,department,contract_type,start_date,location,status,leave_balance';
-async function getDashboard(user){const [{data:employees,range:employeeRange},{data:leaves},{data:jobs},{data:profile}]=await Promise.all([
- rest(query('employees',{select:employeeFields,status:'eq.active',order:'last_name.asc',limit:'500'})),
- rest(query('leave_requests',{select:'id,employee_id,leave_type,start_date,end_date,days,status,created_at',order:'start_date.asc',limit:'500'})),
- rest(query('job_postings',{select:'id,status',status:'eq.open',limit:'500'})),
- rest(query('employees',{select:'id,first_name,last_name,role,leave_balance',id:`eq.${user.employee_id}`,limit:'1'}))
-]);const ids=new Set(employees.map(e=>e.id)),today=new Date().toISOString().slice(0,10),end=new Date(Date.now()+45*86400000).toISOString().slice(0,10);const mine=leaves.filter(x=>x.employee_id===user.employee_id),visible=user.role==='admin'||user.role==='manager'?leaves:mine;const approved=visible.filter(x=>x.status==='approved');const onLeave=approved.filter(x=>x.start_date<=today&&x.end_date>=today).length;const upcoming=approved.filter(x=>x.start_date>=today&&x.start_date<=end).slice(0,5).map(l=>({...l,...employees.find(e=>e.id===l.employee_id)}));return{summary:{employee_count:employeeRange?.split('/')[1]==='*'?employees.length:employees.length,on_leave_today:onLeave,pending_leave:visible.filter(x=>x.status==='pending'&&(user.role!=='employee'||x.employee_id===user.employee_id)).length,open_positions:jobs.length,leave_balance:profile?.[0]?.leave_balance??0,my_pending:mine.filter(x=>x.status==='pending').length,my_approved:mine.filter(x=>x.status==='approved').length,upcoming_leaves:upcoming},user:profile?.[0]||null,employees:(user.role==='admin'||user.role==='manager'?employees:[]).filter(e=>ids.has(e.id)),leaves:visible.map(l=>({...l,...employees.find(e=>e.id===l.employee_id)}))};}
+function reply(res,status,data){
+  res.statusCode=status;
+  res.setHeader('Content-Type','application/json; charset=utf-8');
+  res.setHeader('Cache-Control','no-store');
+  res.end(JSON.stringify(data));
+}
 
-module.exports=async function handler(req,res){try{const action=new URL(req.url,`https://${req.headers.host||'localhost'}`).searchParams.get('action');if(!action)return reply(res,404,{error:'Action introuvable.'});
- if(action==='setup'&&req.method==='POST'){const input=await body(req),secret=process.env.SETUP_SECRET;if(!secret||secret.length<24||!safeEqual(req.headers.authorization||'',`Bearer ${secret}`))return reply(res,404,{error:'Action introuvable.'});const {data:existing}=await rest(query('hr_accounts',{select:'employee_id',limit:'1'}));if(existing.length)return reply(res,409,{error:'Le compte initial a déjà été créé.'});for(const field of ['identifier','password','first_name','last_name'])if(typeof input[field]!=='string'||input[field].trim().length<2)return reply(res,400,{error:`Le champ ${field} est requis.`});if(input.password.length<12)return reply(res,400,{error:'Le mot de passe doit contenir au moins 12 caractères.'});const identifier=input.identifier.trim().toUpperCase();const salt=randomBytes(16).toString('hex'),hash=scryptSync(input.password,salt,64).toString('hex');const created=await rest('employees','POST',{staff_number:identifier,first_name:input.first_name.trim(),last_name:input.last_name.trim(),job_title:'Administrateur RH',department:'Ressources humaines',contract_type:'CDI',status:'active',start_date:new Date().toISOString().slice(0,10),role:'admin',leave_balance:25});const employee=created.data[0];await rest('hr_accounts','POST',{employee_id:employee.id,identifier,password_hash:`scrypt$${salt}$${hash}`,role:'admin',enabled:true});return reply(res,201,{message:'Compte administrateur créé.'});}
- if(action==='login'&&req.method==='POST'){const input=await body(req);const identifier=String(input.identifier||'').trim().toUpperCase(),password=String(input.password||'');if(!identifier||!password)return reply(res,400,{error:'Saisissez votre identifiant et votre mot de passe.'});const ip=String(req.headers['x-forwarded-for']||'').split(',')[0],key=`${ip}:${identifier}`,now=Date.now(),recent=(attempts.get(key)||[]).filter(t=>now-t<600000);if(recent.length>=8)return reply(res,429,{error:'Trop de tentatives. Réessayez dans quelques minutes.'});recent.push(now);attempts.set(key,recent);const {data}=await rest(query('hr_accounts',{select:'employee_id,identifier,password_hash,role,enabled',identifier:`eq.${identifier}`,limit:'1'}));const a=data?.[0],parts=(a?.password_hash||'').split('$');let valid=false;if(a?.enabled&&parts.length===3&&parts[0]==='scrypt'){const candidate=scryptSync(password,parts[1],64).toString('hex');valid=safeEqual(candidate,parts[2]);}if(!valid)return reply(res,401,{error:'Identifiant ou mot de passe incorrect.'});attempts.delete(key);const c=config(),maxAge=input.remember?2592000:28800,token=sign({sub:a.employee_id,iat:Math.floor(now/1000),exp:Math.floor(now/1000)+maxAge},c.secret);setCookie(res,token,maxAge);const {data:profile}=await rest(query('employees',{select:'first_name,last_name,role',id:`eq.${a.employee_id}`,limit:'1'}));return reply(res,200,{user:{identifier:a.identifier,role:a.role,...profile?.[0]}});}
- if(action==='logout'&&req.method==='POST'){clearCookie(res);return reply(res,200,{ok:true});}
- const user=await session(req);if(!user){clearCookie(res);return reply(res,401,{error:'Votre session a expiré. Reconnectez-vous.'});}
- if(action==='me'&&req.method==='GET'){const {data:p}=await rest(query('employees',{select:'first_name,last_name,role',id:`eq.${user.employee_id}`,limit:'1'}));return reply(res,200,{user:{...user,...p?.[0]}})}
- if(action==='dashboard'&&req.method==='GET'){const data=await getDashboard(user);return reply(res,200,data)}
- if(action==='leave'&&req.method==='POST'){const input=await body(req),start=String(input.start_date||''),end=String(input.end_date||'');if(!/^\d{4}-\d{2}-\d{2}$/.test(start)||!/^\d{4}-\d{2}-\d{2}$/.test(end)||start>end||daysBetween(start,end)<1||daysBetween(start,end)>60)return reply(res,400,{error:'Choisissez des dates valides, jusqu’à 60 jours ouvrés.'});const {data:overlap}=await rest(query('leave_requests',{select:'id',employee_id:`eq.${user.employee_id}`,status:'in.(pending,approved)',start_date:`lte.${end}`,end_date:`gte.${start}`,limit:'1'}));if(overlap.length)return reply(res,409,{error:'Une demande existe déjà sur cette période.'});await rest('leave_requests','POST',{employee_id:user.employee_id,leave_type:String(input.leave_type||'Congés payés').slice(0,80),start_date:start,end_date:end,days:daysBetween(start,end),status:'pending'});return reply(res,201,{ok:true});}
- if(action==='leave-status'&&req.method==='POST'){if(!['admin','manager'].includes(user.role))return reply(res,403,{error:'Vous n’avez pas les droits nécessaires.'});const input=await body(req);if(!input.id||!['approved','rejected'].includes(input.status))return reply(res,400,{error:'Décision invalide.'});const result=await rest(query('leave_requests',{id:`eq.${String(input.id).replace(/[^\w-]/g,'')}`,status:'eq.pending'}),'PATCH',{status:input.status,reviewed_by:user.employee_id,reviewed_at:new Date().toISOString()});if(!result.data?.length)return reply(res,404,{error:'Cette demande n’est plus en attente.'});return reply(res,200,{ok:true});}
- if(action==='add-employee'&&req.method==='POST'){if(user.role!=='admin')return reply(res,403,{error:'Seule l’administration RH peut créer un profil.'});const input=await body(req);for(const f of ['identifier','password','first_name','last_name','staff_number'])if(typeof input[f]!=='string'||input[f].trim().length<2)return reply(res,400,{error:`Le champ ${f} est requis.`});if(input.password.length<12)return reply(res,400,{error:'Le mot de passe doit contenir au moins 12 caractères.'});const identifier=input.identifier.trim().toUpperCase(),salt=randomBytes(16).toString('hex'),hash=scryptSync(input.password,salt,64).toString('hex'),role=['employee','manager'].includes(input.role)?input.role:'employee';const newEmployee=await rest('employees','POST',{staff_number:input.staff_number.trim(),first_name:input.first_name.trim(),last_name:input.last_name.trim(),job_title:String(input.job_title||'').trim()||null,department:String(input.department||'').trim()||null,contract_type:String(input.contract_type||'CDI').trim(),start_date:input.start_date||new Date().toISOString().slice(0,10),location:String(input.location||'').trim()||null,status:'active',role,leave_balance:25});try{await rest('hr_accounts','POST',{employee_id:newEmployee.data[0].id,identifier,password_hash:`scrypt$${salt}$${hash}`,role,enabled:true})}catch(e){await rest(query('employees',{id:`eq.${newEmployee.data[0].id}`}),'DELETE');throw e}return reply(res,201,{employee_id:newEmployee.data[0].id,identifier,temporary_password:input.password});}
- if(action==='employees'&&req.method==='GET'){if(!['admin','manager'].includes(user.role))return reply(res,403,{error:'Accès réservé à l’équipe RH.'});const result=await rest(query('employees',{select:employeeFields,status:'eq.active',order:'last_name.asc',limit:'500'}));return reply(res,200,{employees:result.data})}
- if(action==='leaves'&&req.method==='GET'){const params={select:'id,employee_id,leave_type,start_date,end_date,days,status,created_at',order:'start_date.desc',limit:'500'};if(user.role==='employee')params.employee_id=`eq.${user.employee_id}`;const result=await rest(query('leave_requests',params));return reply(res,200,{leaves:result.data})}
- return reply(res,405,{error:'Méthode non prise en charge.'});
- }catch(error){console.error('[noria-api]',error.message);return reply(res,error.status&&error.status<500?error.status:503,{error:error.status&&error.status<500?error.message:'Le service est momentanément indisponible. Réessayez plus tard.'});}};
+async function body(req){
+  let text='';
+  for await(const chunk of req){
+    text+=chunk;
+    if(text.length>7200000)throw Object.assign(new Error('Requête trop volumineuse.'),{status:413});
+  }
+  try{return JSON.parse(text||'{}')}
+  catch{throw Object.assign(new Error('Requête invalide.'),{status:400})}
+}
+
+module.exports=async function handler(req,res){
+  try{
+    const incoming=new URL(req.url,`https://${req.headers.host||'localhost'}`);
+    const action=incoming.searchParams.get('action');
+    if(!action)return reply(res,404,{error:'Action introuvable.'});
+
+    const target=new URL(EDGE_FUNCTION);
+    target.searchParams.set('action',action);
+    const headers={apikey:SUPABASE_PUBLISHABLE_KEY};
+    if(req.headers.cookie)headers.Cookie=req.headers.cookie;
+
+    let requestBody;
+    if(!['GET','HEAD'].includes(req.method)){
+      headers['Content-Type']='application/json';
+      requestBody=JSON.stringify(await body(req));
+    }
+    const upstream=await fetch(target,{method:req.method,headers,body:requestBody});
+    const responseBody=await upstream.text();
+    res.statusCode=upstream.status;
+    res.setHeader('Content-Type',upstream.headers.get('content-type')||'application/json; charset=utf-8');
+    res.setHeader('Cache-Control','no-store');
+    const cookies=typeof upstream.headers.getSetCookie==='function'
+      ?upstream.headers.getSetCookie()
+      :(upstream.headers.get('set-cookie')?[upstream.headers.get('set-cookie')]:[]);
+    if(cookies.length)res.setHeader('Set-Cookie',cookies);
+    res.end(responseBody);
+  }catch(error){
+    console.error('[noria-proxy]',error?.message||error);
+    reply(res,error?.status&&error.status<500?error.status:503,{
+      error:error?.status&&error.status<500?error.message:'Le service est momentanément indisponible. Réessayez plus tard.'
+    });
+  }
+};
